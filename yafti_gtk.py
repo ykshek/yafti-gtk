@@ -17,10 +17,6 @@ APP_ID = 'io.github.ublue_os.yafti_gtk'
 APP_TITLE = 'Bazzite Portal'
 DEFAULT_WINDOW_WIDTH = 800
 DEFAULT_WINDOW_HEIGHT = 600
-DIALOG_WIDTH = 700
-DIALOG_HEIGHT = 400
-SCROLLBACK_LINES = 10000
-TERMINAL_CHECK_TIMEOUT = 2
  
 
 
@@ -71,6 +67,28 @@ def setup_theme():
         settings.set_property('gtk-application-prefer-dark-theme', True)
 
 
+def build_child_environment():
+    """Avoid leaking forced GTK theme overrides into launched apps."""
+    child_env = os.environ.copy()
+    child_env.pop('GTK_THEME', None)
+    return child_env
+
+
+def build_terminal_command(script):
+    """Return the default terminal launcher command."""
+    return [
+        "xdg-terminal-exec",
+        f"--app-id={APP_ID}",
+        f"--title={APP_TITLE}",
+        "--",
+        "bash",
+        "--noprofile",
+        "--norc",
+        "-lc",
+        script,
+    ]
+
+
 class YaftiGTK(Gtk.Window):
     def __init__(self, config_file='yafti.yml'):
         super().__init__(title=APP_TITLE)
@@ -91,7 +109,6 @@ class YaftiGTK(Gtk.Window):
         search_entry.set_placeholder_text("Search Apps and Actions")
         set_widget_margins(search_entry, 4, 4, 4, 4)
         search_entry.connect("search-changed", self.on_search_changed)
-        self.search_entry = search_entry
         vbox.pack_start(search_entry, False, False, 0)
 
         # Notebook (tabs) directly below search
@@ -197,7 +214,7 @@ class YaftiGTK(Gtk.Window):
         
         # Connect click event
         script = action.get('script', '')
-        button.connect("clicked", self.on_action_clicked, action.get('title', 'Action'), script)
+        button.connect("clicked", self.on_action_clicked, script)
         
         # Add frame around button
         frame = Gtk.Frame()
@@ -211,7 +228,7 @@ class YaftiGTK(Gtk.Window):
         index = []
         for screen in self.screens or []:
             for action in screen.get('actions', []):
-                index.append({'screen_title': screen.get('title', ''), 'action': action})
+                index.append({'action': action})
         return index
 
     def on_search_changed(self, entry):
@@ -251,58 +268,38 @@ class YaftiGTK(Gtk.Window):
         self.search_results_box.show_all()
         self.content_stack.set_visible_child_name("search")
     
-    def on_action_clicked(self, button, title, script):
+    def on_action_clicked(self, _button, script):
         """Handle action button click - run script in terminal window"""
         if not script:
             return
-        # Always try host terminal; if unavailable show an error
-        if self.launch_host_terminal(script.strip()):
+
+        clean_script = script.strip()
+        if not clean_script:
+            return
+
+        # Always try a terminal; if unavailable show an error
+        error_message = self.launch_terminal(clean_script)
+        if error_message is None:
             return
 
         show_error_dialog(
             self,
             "No terminal available",
-            "Could not launch a host terminal to run the script.\n\nPlease install a terminal emulator or run the following command manually:\n\n" + script
+            "Could not open a terminal automatically.\n\n"
+            + error_message
+            + "\n\nYou can also run the following command manually:\n\n"
+            + clean_script
         )
 
-    def launch_host_terminal(self, script):
-        """Attempt to run a command in a host terminal. Returns True if launched."""
-        candidate_terminals = [
-            "ptyxis",
-            "konsole",
-            "gnome-terminal",
-            "xterm",
-        ]
-        
-        for terminal in candidate_terminals:
-            try:
-                # First check if terminal exists on PATH
-                check = subprocess.run(
-                    ["which", terminal],
-                    capture_output=True,
-                    timeout=TERMINAL_CHECK_TIMEOUT
-                )
-                if check.returncode != 0:
-                    continue  # Terminal not found, try next
-                    
-                # Terminal exists, launch it
-                cmd = [
-                    terminal,
-                    "--",
-                    "bash",
-                    "--noprofile",
-                    "--norc",
-                    "-lc",
-                    script,
-                ]
-                subprocess.Popen(cmd)
-                return True
-            except Exception as e:
-                print(f"Host terminal '{terminal}' launch failed: {e}")
-                continue
-        
-        print("Host terminal launch failed: no suitable terminal found.")
-        return False
+    def launch_terminal(self, script):
+        """Attempt to run a command in a terminal. Returns None on success."""
+        try:
+            subprocess.Popen(build_terminal_command(script), env=build_child_environment())
+            return None
+        except FileNotFoundError:
+            return "The default terminal launcher (xdg-terminal-exec) was not found."
+        except Exception as e:
+            return f"Terminal launch failed: {e}"
     
     
 
@@ -319,11 +316,6 @@ def main():
     # Apply theme before creating window
     setup_theme()
 
-    # Validate config file exists
-    if not os.path.exists(config_file):
-        print(f"Error: yafti config not found at {config_file}")
-        sys.exit(1)
-    
     # Create and show window
     win = YaftiGTK(config_file)
     win.connect("destroy", Gtk.main_quit)

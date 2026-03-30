@@ -5,7 +5,7 @@
 
 A GTK3 interface for the Bazzite Portal, providing quick access to various useful scripts, fixes, and QOL tweaks for the terminal averse.
 
-The default configuration file is located at:
+On installed systems, the default configuration file is located at:
 ```
 /usr/share/yafti/yafti.yml
 ```
@@ -22,6 +22,8 @@ sudo dnf install bazzite-portal
 ## Running
 
 The application requires a YAML configuration file path as a command-line argument.
+
+Action buttons open commands in your system's default terminal through `xdg-terminal-exec`.
 
 ### On Bazzite (default config)
 
