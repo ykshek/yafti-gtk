@@ -109,7 +109,7 @@ class YaftiGTK(Gtk.Window):
         # Search bar at the top
         search_entry = Gtk.SearchEntry()
         search_entry.set_placeholder_text("Search Apps and Actions")
-        set_widget_margins(search_entry, 4, 4, 4, 4)
+        set_widget_margins(search_entry, 10, 10, 10, 10)
         search_entry.connect("search-changed", self.on_search_changed)
         vbox.append(search_entry)
 
