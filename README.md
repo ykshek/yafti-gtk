@@ -1,7 +1,10 @@
 # Bazzite Portal
 
-![Bazzite Portal Screenshot](assets/demo.gif)
+## Demo - KDE Plasma
+![Bazzite Portal Demo (KDE Plasma)](assets/demo.gif)
 
+## Demo - GNOME
+![Bazzite Portal Demo (GNOME)](assets/demo-gnome.gif)
 
 A GTK4 interface for the Bazzite Portal, providing quick access to various useful scripts, fixes, and QOL tweaks for the terminal averse.
 
