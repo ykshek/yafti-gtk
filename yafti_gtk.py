@@ -6,6 +6,7 @@ Yafti GTK - A simple GTK GUI for running scripts from yafti.yml
 import subprocess
 import sys
 import threading
+import argparse
 
 import gi
 import yaml
@@ -60,7 +61,7 @@ def initialize_gtk():
     GLib.set_prgname(APP_ID)
     Gtk.init()
     Adw.init()
-    
+
     try:
         Gtk.Window.set_default_icon_name(APP_ID)
     except Exception as e:
@@ -103,6 +104,7 @@ class YaftiGTK(Gtk.Window):
         super().__init__(title=APP_TITLE)
         self.set_default_size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self.active_dialog_state = None
+        self.action_widgets = {}  # action_id -> (button)
 
         # Load YAML configuration
         self.config = self.load_config(config_file)
@@ -153,10 +155,35 @@ class YaftiGTK(Gtk.Window):
 
         vbox.append(self.content_stack)
 
+        # Load CSS for highlighting
+        self._load_css()
+
         self.connect("notify::is-active", self.on_window_active_changed)
         focus_controller = Gtk.EventControllerFocus.new()
         focus_controller.connect("enter", self.on_window_focus_in)
         self.add_controller(focus_controller)
+
+    def _load_css(self):
+        """Loads CSS to highlight the selected action."""
+        css = b"""
+        @keyframes flash-animation {
+            0% { border-color: @accent_color; }
+            50% { background-color: alpha(@accent_bg_color, 0.5); border-color: @accent_color; }
+            100% { border-color: @accent_color; }
+        }
+
+        .highlighted-action {
+            border: 2px solid @accent_color;
+            animation: flash-animation 1000ms ease-in-out 2;
+        }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_display(
+            self.get_display(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
 
     def load_config(self, config_file):
         """Load and parse the YAML configuration file."""
@@ -219,6 +246,11 @@ class YaftiGTK(Gtk.Window):
 
         frame = Gtk.Frame()
         frame.set_child(button)
+
+        # Store button for lookup
+        action_id = action.get('id')
+        if action_id:
+            self.action_widgets[action_id] = button
 
         return frame
 
@@ -558,15 +590,52 @@ class YaftiGTK(Gtk.Window):
         except Exception as e:
             return f"Terminal launch failed: {e}"
 
+    def _get_notebook_page_for_widget(self, widget):
+        """Gets the page number of the widget to switch to. Returns -1 on fail."""
+        parent = widget.get_parent()
+        while parent:
+            page_num = self.notebook.page_num(parent)
+            if page_num >= 0:
+                return page_num
+            parent = parent.get_parent()
+        return -1
+
+    def _finish_highlight(self, button):
+        """Does the scroll."""
+        scrolled = button.get_ancestor(Gtk.ScrolledWindow)
+        if scrolled:
+            try:
+                scrolled.scroll_to_child(button, None)
+            except AttributeError:
+                pass
+        self._apply_highlight(button)
+
+    def _apply_highlight(self, button):
+        """Applies the highlight."""
+        button.add_css_class("highlighted-action")
+        button.grab_focus()
+
+    def highlight_action(self, action_id):
+        if action_id not in self.action_widgets:
+            return
+
+        button = self.action_widgets[action_id]
+        page_num = self._get_notebook_page_for_widget(button)
+        self.content_stack.set_visible_child_name("tabs")
+        self.notebook.set_current_page(page_num)
+
+        def _delayed_scroll():
+            """ Delay to make sure scrolling animation is played."""
+            self._finish_highlight(button)
+            return False
+        GLib.timeout_add(250, _delayed_scroll)
 
 def main():
-    # Check command-line arguments
-    if len(sys.argv) != 2:
-        print(f"Usage: {APP_ID} CONFIG_FILE")
-        print("Example: python3 yafti_gtk.py /path/to/yafti.yml")
-        sys.exit(1)
-
-    config_file = sys.argv[1]
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Bazzite Portal")
+    parser.add_argument("CONFIG_FILE", help="Path to the yafti.yml configuration file")
+    parser.add_argument("--action-id", help="ID of the action to highlight", default=None)
+    args = parser.parse_args()
 
     # Initialize GTK before creating the window.
     initialize_gtk()
@@ -574,9 +643,13 @@ def main():
     loop = GLib.MainLoop()
 
     # Create and show window
-    win = YaftiGTK(config_file)
+    win = YaftiGTK(args.CONFIG_FILE)
     win.connect("close-request", lambda *_: loop.quit())
     win.set_visible(True)
+
+    # If an action ID was provided, highlight it after window is shown
+    if args.action_id:
+        GLib.idle_add(win.highlight_action, args.action_id)
 
     loop.run()
 
