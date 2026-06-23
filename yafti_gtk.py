@@ -122,23 +122,38 @@ class YaftiGTK(Gtk.Window):
         search_entry.connect("search-changed", self.on_search_changed)
         vbox.append(search_entry)
 
-        # Notebook (tabs) directly below search
-        self.notebook = Gtk.Notebook()
-        self.notebook.set_scrollable(True)
+        # Container to hold the switcher and pages together so they disappear during search
+        tabs_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        # Stack for screen pages
+        self.screen_stack = Gtk.Stack()
+        self.screen_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.screen_stack.set_transition_duration(150)
+        self.screen_stack.set_vexpand(True)
+        self.screen_stack.set_hexpand(True)
+
+        # Tab switcher
+        self.tab_switcher = Gtk.StackSwitcher()
+        self.tab_switcher.set_stack(self.screen_stack)
+        set_widget_margins(self.tab_switcher, 10, 10, 10, 10)
+
+        # Assemble into container
+        tabs_container.append(self.tab_switcher)
+        tabs_container.append(self.screen_stack)
 
         # Add tabs for each screen from YAML
         for screen in self.screens:
             page = self.create_screen_page(screen)
-            label = Gtk.Label(label=screen.get('title', 'Tab'))
-            self.notebook.append_page(page, label)
+            label = screen.get('title', 'Tab')
+            self.screen_stack.add_titled(page, label, label)
 
-        # Stack to switch between notebook and search results
+        # Stack to switch between container and search results
         self.content_stack = Gtk.Stack()
         self.content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.content_stack.set_transition_duration(150)
 
-        # Add notebook to stack
-        self.content_stack.add_named(self.notebook, "tabs")
+        # Map our tabs view structure to the view name index
+        self.content_stack.add_named(tabs_container, "tabs")
 
         # Search results page
         search_scrolled = Gtk.ScrolledWindow()
