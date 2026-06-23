@@ -605,15 +605,17 @@ class YaftiGTK(Gtk.Window):
         except Exception as e:
             return f"Terminal launch failed: {e}"
 
-    def _get_notebook_page_for_widget(self, widget):
-        """Gets the page number of the widget to switch to. Returns -1 on fail."""
-        parent = widget.get_parent()
-        while parent:
-            page_num = self.notebook.page_num(parent)
-            if page_num >= 0:
-                return page_num
-            parent = parent.get_parent()
-        return -1
+    def _get_page_for_widget(self, widget):
+        """Gets the page number of the widget to switch to. Returns None on fail."""
+        current = widget
+        while current is not None:
+            parent = current.get_parent()
+            # Parent is screen stack, current is stack of screens
+            if parent == self.screen_stack:
+                page_name = self.screen_stack.get_page(current).get_name()
+                return page_name
+            current = parent
+        return None
 
     def _finish_highlight(self, button):
         """Does the scroll."""
@@ -635,9 +637,9 @@ class YaftiGTK(Gtk.Window):
             return
 
         button = self.action_widgets[action_id]
-        page_num = self._get_notebook_page_for_widget(button)
+        page_name = self._get_page_for_widget(button)
         self.content_stack.set_visible_child_name("tabs")
-        self.notebook.set_current_page(page_num)
+        self.screen_stack.set_visible_child_name(page_name)
 
         def _delayed_scroll():
             """ Delay to make sure scrolling animation is played."""
