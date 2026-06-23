@@ -212,7 +212,7 @@ class YaftiGTK(Gtk.Window):
             desc_label = Gtk.Label(label=action['description'])
             desc_label.set_xalign(0)
             desc_label.set_wrap(True)
-            desc_label.set_max_width_chars(60)
+            desc_label.set_max_width_chars(120)
             desc_label.add_css_class('dim-label')
             text_box.append(desc_label)
 
