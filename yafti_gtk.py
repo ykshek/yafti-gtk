@@ -4,7 +4,7 @@ Yafti GTK - A simple GTK GUI for running scripts from yafti.yml
 """
 
 import subprocess
-import sys
+import sys, os
 import threading
 import argparse
 
@@ -57,11 +57,14 @@ def show_error_dialog(parent, title, message):
 
 
 def initialize_gtk():
-    """Initialize GTK, Adwaita, and application metadata."""
+    """Initialize GTK and application metadata, then load Adwaita depending on DE."""
     GLib.set_prgname(APP_ID)
     Gtk.init()
-    Adw.init()
-
+    current_desktop = os.environ.get("XDG_CURRENT_DESKTOP","").upper()
+    print(current_desktop)
+    if "KDE" not in current_desktop:
+        Adw.init()
+    
     try:
         Gtk.Window.set_default_icon_name(APP_ID)
     except Exception as e:
@@ -251,7 +254,7 @@ class YaftiGTK(Gtk.Window):
             desc_label = Gtk.Label(label=action['description'])
             desc_label.set_xalign(0)
             desc_label.set_wrap(True)
-            desc_label.set_max_width_chars(60)
+            desc_label.set_max_width_chars(120)
             desc_label.add_css_class('dim-label')
             text_box.append(desc_label)
 
