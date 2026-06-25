@@ -206,6 +206,12 @@ class YaftiGTK(Gtk.Window):
         @define-color accent {accent};
         @define-color accent_bg alpha(@accent, 0.3);
 
+        slider,
+        .slider {{
+            min-height: 8px;
+            min-width: 8px;
+        }}
+
         @keyframes flash-animation {{
             0% {{
                 border-color: @accent;
