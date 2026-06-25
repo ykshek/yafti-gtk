@@ -119,7 +119,7 @@ class YaftiGTK(Gtk.Window):
 
         # Search bar at the top
         search_entry = Gtk.SearchEntry()
-        search_entry.set_placeholder_text("Search Apps and Actions")
+        search_entry.set_placeholder_text(" Search Apps and Actions")
         set_widget_margins(search_entry, 10, 10, 10, 10)
         search_entry.connect("search-changed", self.on_search_changed)
         vbox.append(search_entry)
@@ -129,7 +129,7 @@ class YaftiGTK(Gtk.Window):
 
         # Stack for screen pages
         self.screen_stack = Gtk.Stack()
-        self.screen_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.screen_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         self.screen_stack.set_transition_duration(150)
         self.screen_stack.set_vexpand(True)
         self.screen_stack.set_hexpand(True)
