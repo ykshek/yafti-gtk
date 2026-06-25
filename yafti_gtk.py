@@ -13,7 +13,7 @@ import yaml
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import GLib, Gtk, Adw
+from gi.repository import GLib, Gtk
 
 # Constants
 APP_ID = 'io.github.ublue_os.yafti_gtk'
@@ -62,8 +62,8 @@ def initialize_gtk():
     Gtk.init()
     current_desktop = os.environ.get("XDG_CURRENT_DESKTOP","").upper()
     if "KDE" not in current_desktop:
+        from gi.repository import Adw
         Adw.init()
-    
     try:
         Gtk.Window.set_default_icon_name(APP_ID)
     except Exception as e:
@@ -182,17 +182,47 @@ class YaftiGTK(Gtk.Window):
 
     def _load_css(self):
         """Loads CSS to highlight the selected action."""
-        css = b"""
-        @keyframes flash-animation {
-            0% { border-color: @accent_color; }
-            50% { background-color: alpha(@accent_bg_color, 0.5); border-color: @accent_color; }
-            100% { border-color: @accent_color; }
-        }
 
-        .highlighted-action {
-            border: 2px solid @accent_color;
+        def _get_system_accent_color():
+            """Fetches the system accent color via XDG Portal."""
+            import re
+            default_color = "deep-purple"
+            try:
+                out = subprocess.check_output([
+                    "gdbus", "call", "-e",
+                    "-d", "org.freedesktop.portal.Desktop",
+                    "-o", "/org/freedesktop/portal/desktop",
+                    "-m", "org.freedesktop.portal.Settings.Read",
+                    "'org.freedesktop.appearance'", "'accent-color'"
+                ], text=True, stderr=subprocess.DEVNULL)
+
+                r, g, b = map(float, re.findall(r"\d+\.\d+", out)[:3])
+                return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
+            except Exception:
+                return "#a47bea"
+
+        accent = _get_system_accent_color()
+        css = f"""
+        @define-color accent {accent};
+        @define-color accent_bg alpha(@accent, 0.3);
+
+        @keyframes flash-animation {{
+            0% {{
+                border-color: @accent;
+            }}
+            50% {{
+                background-color: @accent_bg;
+                border-color: @accent;
+            }}
+            100% {{
+                border-color: @accent;
+            }}
+        }}
+
+        .highlighted-action {{
+            border: 2px solid @accent;
             animation: flash-animation 1000ms ease-in-out 2;
-        }
+        }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
