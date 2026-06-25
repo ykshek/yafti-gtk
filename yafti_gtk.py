@@ -61,7 +61,6 @@ def initialize_gtk():
     GLib.set_prgname(APP_ID)
     Gtk.init()
     current_desktop = os.environ.get("XDG_CURRENT_DESKTOP","").upper()
-    print(current_desktop)
     if "KDE" not in current_desktop:
         Adw.init()
     
