@@ -7,6 +7,7 @@ import subprocess
 import sys, os
 import threading
 import argparse
+import concurrent.futures
 
 import gi
 import yaml
@@ -108,6 +109,7 @@ class YaftiGTK(Gtk.Window):
         self.set_default_size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self.active_dialog_state = None
         self.action_widgets = {}  # action_id -> (button)
+        self.action_status_widgets = {}
 
         # Load YAML configuration
         self.config = self.load_config(config_file)
@@ -180,6 +182,7 @@ class YaftiGTK(Gtk.Window):
         focus_controller = Gtk.EventControllerFocus.new()
         focus_controller.connect("enter", self.on_window_focus_in)
         self.add_controller(focus_controller)
+        self.refresh_all_action_states()
 
     def _load_css(self):
         """Loads CSS to highlight the selected action."""
@@ -325,6 +328,7 @@ class YaftiGTK(Gtk.Window):
             empty.set_xalign(0)
             self.search_results_box.append(empty)
 
+        GLib.idle_add(self.refresh_all_action_states)
         self.search_results_box.set_visible(True)
         self.content_stack.set_visible_child_name("search")
 
@@ -387,16 +391,19 @@ class YaftiGTK(Gtk.Window):
     def on_window_active_changed(self, window, _pspec):
         """Refresh the active dialog when the portal window becomes active."""
         if window.get_property("is-active"):
-            self.refresh_active_dialog_if_needed()
+            GLib.idle_add(self.refresh_active_dialog_if_needed)
+            GLib.idle_add(self.refresh_all_action_states)
 
     def on_dialog_active_changed(self, dialog, _pspec, state):
         """Refresh the dialog when it becomes active again."""
         if dialog.get_property("is-active"):
             self.refresh_dialog_if_needed(state)
+            self.refresh_all_action_states()
 
     def on_window_focus_in(self, _controller):
         """Refresh the active dialog on focus return when needed."""
-        self.refresh_active_dialog_if_needed()
+        GLib.idle_add(self.refresh_active_dialog_if_needed)
+        GLib.idle_add(self.refresh_all_action_states)
         return False
 
     def on_dialog_focus_in(self, _controller, state):
@@ -587,6 +594,14 @@ class YaftiGTK(Gtk.Window):
         if error_message is None:
             if (state['action'].get('status_script') or "").strip():
                 state['dirty'] = True
+
+                # Create a thread to wait for the terminal to close, then update UI
+                def wait_and_refresh():
+                    result.wait()
+                    GLib.idle_add(self.refresh_action_dialog, state, True)
+                    GLib.idle_add(self.refresh_all_action_states)
+
+                threading.Thread(target=wait_and_refresh, daemon=True).start()
             return
 
         show_error_dialog(
@@ -607,6 +622,148 @@ class YaftiGTK(Gtk.Window):
             return "The default terminal launcher (xdg-terminal-exec) was not found."
         except Exception as e:
             return f"Terminal launch failed: {e}"
+
+    def create_action_item(self, action):
+        """Create a clickable action item."""
+        button = Gtk.Button()
+        button.set_hexpand(True)
+        button.set_halign(Gtk.Align.FILL)
+
+        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        set_widget_margins(button_box, 8, 8, 8, 8)
+
+        # 1. MAKE TEXT BOX EXPAND SO STATUS IS PUSHED TO THE RIGHT
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box.set_hexpand(True)
+
+        title_label = Gtk.Label()
+        title_label.set_markup(f"<b>{escape_markup(action.get('title', 'Action'))}</b>")
+        title_label.set_xalign(0)
+        text_box.append(title_label)
+
+        if action.get('description'):
+            desc_label = Gtk.Label(label=action['description'])
+            desc_label.set_xalign(0)
+            desc_label.set_wrap(True)
+            desc_label.set_max_width_chars(120)
+            desc_label.add_css_class('dim-label')
+            text_box.append(desc_label)
+
+        button_box.append(text_box)
+
+        # 2. CREATE THE STATUS WIDGET (EMOJI + LABEL)
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        status_box.set_valign(Gtk.Align.CENTER)
+        status_box.set_size_request(80, -1)
+
+        # Start with a default "loading" or "pending" emoji
+        status_label = Gtk.Label(label="⏳ Checking...")
+        status_label.add_css_class('dim-label')
+        status_label.set_xalign(0)
+
+        status_box.append(status_label)
+        button_box.append(status_box)
+
+        button.set_child(button_box)
+        button.connect("clicked", self.on_action_clicked, action)
+
+        frame = Gtk.Frame()
+        frame.set_child(button)
+
+        # 3. STORE REFERENCES FOR BACKGROUND UPDATES
+        action_id = action.get('id')
+        if action_id:
+            self.action_widgets[action_id] = button
+            if action.get('status_script'):
+                self.action_status_widgets[action_id] = {
+                    'label': status_label,
+                    'box': status_box
+                }
+            else:
+                # Hide status box if there is no status_script
+                status_box.set_visible(False)
+
+        return frame
+
+    def refresh_all_action_states(self):
+        """Run status checks for all actions in a background thread pool."""
+        # Using a ThreadPoolExecutor to run scripts concurrently without freezing UI
+        thread = threading.Thread(target=self._run_all_status_checks_bg, daemon=True)
+        thread.start()
+
+    def _run_all_status_checks_bg(self):
+        """Background task to gather all statuses."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            for item in self.actions_index:
+                action = item['action']
+                action_id = action.get('id')
+                status_script = action.get('status_script')
+
+                if action_id and status_script:
+                    executor.submit(self._fetch_and_update_single_status, action_id, status_script)
+
+    def _fetch_and_update_single_status(self, action_id, status_script):
+        """Executes a single script and schedules a UI update."""
+        status_token = "unknown"
+        try:
+            result = subprocess.run(
+                build_headless_command(status_script),
+                capture_output=True,
+                text=True,
+                timeout=STATUS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    token = line.strip()
+                    if token:
+                        status_token = token
+                        break
+        except Exception:
+            pass
+
+        # Safely update the GTK UI from the background thread
+        GLib.idle_add(self._update_status_ui, action_id, status_token)
+
+    def _update_status_ui(self, action_id, status_token):
+        """Updates the icon and label on the main GTK thread."""
+        widgets = self.action_status_widgets.get(action_id)
+        if not widgets:
+            return False
+
+        token_lower = status_token.lower()
+        if token_lower in ["install", "active", "enable", "add"]:
+            emoji = "🟢"
+        elif token_lower in ["uninstall", "inactive", "disable", "disabled", "remove", "unset"]:
+            emoji = "🟠"
+        elif token_lower == "unknown":
+            emoji = "⚪"
+        else:
+            emoji = "🔵"
+
+        # Map token to human-readable text
+
+
+        # Format the text (hide the word if it's "unknown")
+        if status_token == "unknown":
+            display_text = "Unknown"
+        elif token_lower in ["install"]:
+            display_text = "Installed"
+        elif token_lower in ["enable"]:
+            display_text = "Enabled"
+        elif token_lower in ["uninstall"]:
+            display_text = "Not installed"
+        elif token_lower in ["disable"]:
+            display_text = "Disabled"
+        elif token_lower in ["remove"]:
+            display_text = "Removed"
+        else:
+            display_text = status_token.capitalize()
+
+        # Update the single label with both the emoji and text
+        widgets['label'].set_text(f"{emoji} {display_text}")
+
+        return False
 
     def _get_page_for_widget(self, widget):
         """Gets the page number of the widget to switch to. Returns None on fail."""
