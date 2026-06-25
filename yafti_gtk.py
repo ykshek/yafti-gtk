@@ -599,6 +599,7 @@ class YaftiGTK(Gtk.Window):
             root.append(status_label)
 
         actions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        active_button = None
         for option in self.get_action_options(action):
             option_button = Gtk.Button(label=option.get('label', 'Run'))
             option_button.set_hexpand(True)
@@ -620,7 +621,8 @@ class YaftiGTK(Gtk.Window):
         dialog.set_child(root)
         dialog.set_visible(True)
 
-        dialog.set_focus(active_button)
+        if active_button:
+            dialog.set_focus(active_button)
 
     def option_is_highlighted(self, option, status_token):
         """Return True when the option ID matches the current status token."""
