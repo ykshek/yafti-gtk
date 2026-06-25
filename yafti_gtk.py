@@ -386,7 +386,7 @@ class YaftiGTK(Gtk.Window):
     def on_window_active_changed(self, window, _pspec):
         """Refresh the active dialog when the portal window becomes active."""
         if window.get_property("is-active"):
-            self.refresh_active_dialog_if_needed()
+            GLib.idle_add(self.refresh_active_dialog_if_needed)
 
     def on_dialog_active_changed(self, dialog, _pspec, state):
         """Refresh the dialog when it becomes active again."""
@@ -395,12 +395,12 @@ class YaftiGTK(Gtk.Window):
 
     def on_window_focus_in(self, _controller):
         """Refresh the active dialog on focus return when needed."""
-        self.refresh_active_dialog_if_needed()
+        GLib.idle_add(self.refresh_active_dialog_if_needed)
         return False
 
     def on_dialog_focus_in(self, _controller, state):
         """Refresh the focused dialog after a launched action when needed."""
-        self.refresh_dialog_if_needed(state)
+        GLib.idle_add(self.refresh_dialog_if_needed, state)
         return False
 
     def refresh_active_dialog_if_needed(self):
@@ -410,7 +410,7 @@ class YaftiGTK(Gtk.Window):
     def refresh_dialog_if_needed(self, state):
         """Refresh a dialog when its status is dirty."""
         if self.should_refresh_dialog(state):
-            self.refresh_action_dialog(state)
+            self.refresh_action_dialog(state, background_only=True)
 
     def should_refresh_dialog(self, state):
         """Return True when a dialog should refresh its status on focus return."""
@@ -422,7 +422,7 @@ class YaftiGTK(Gtk.Window):
             return False
         return state.get('dirty', False)
 
-    def refresh_action_dialog(self, state):
+    def refresh_action_dialog(self, state, background_only=False):
         """Show the loading state and rerun the dialog status check."""
         if not state or state.get('closed'):
             return
@@ -436,7 +436,8 @@ class YaftiGTK(Gtk.Window):
         state['dirty'] = False
         state['request_id'] += 1
         request_id = state['request_id']
-        self.build_action_dialog_loading(state)
+        if not background_only:
+            self.build_action_dialog_loading(state)
 
         thread = threading.Thread(
             target=self.run_status_check,
@@ -466,7 +467,7 @@ class YaftiGTK(Gtk.Window):
         dialog.set_child(loading_box)
         dialog.set_visible(True)
 
-    def run_status_check(self, state, request_id, status_script):
+    def run_status_check(self, state, request_id, status_script, background_only=False):
         """Run the modal status check in the background."""
         status_token = "unknown"
         status_timed_out = False
@@ -497,9 +498,10 @@ class YaftiGTK(Gtk.Window):
             request_id,
             status_token,
             status_timed_out,
+            background_only,
         )
 
-    def finish_status_check(self, state, request_id, status_token, status_timed_out):
+    def finish_status_check(self, state, request_id, status_token, status_timed_out, background_only=False):
         """Update the dialog once the status check completes."""
         if not state or state.get('closed'):
             return False
@@ -508,8 +510,20 @@ class YaftiGTK(Gtk.Window):
         if state.get('request_id') != request_id:
             return False
 
-        self.build_action_dialog_content(state, status_token, status_timed_out)
+        if background_only and not state.get('loading'):
+            self.update_dialog_highlights(state, status_token)
+        else:
+            self.build_action_dialog_content(state, status_token, status_timed_out)
         return False
+
+    def update_dialog_highlights(self, state, status_token):
+        """Updates button highlights in-place without rebuilding the dialog layout."""
+        state['status_token'] = status_token
+        for button, option in state.get('option_buttons', []):
+            if self.option_is_highlighted(option, status_token):
+                button.add_css_class("suggested-action")
+            else:
+                button.remove_css_class("suggested-action")
 
     def build_action_dialog_content(self, state, status_token, status_timed_out=False):
         """Render the full action dialog after status is known."""
@@ -632,7 +646,8 @@ class YaftiGTK(Gtk.Window):
     def _apply_highlight(self, button):
         """Applies the highlight."""
         button.add_css_class("highlighted-action")
-        button.grab_focus()
+        if button.get_mapped():
+            self.set_focus(button)
 
     def highlight_action(self, action_id):
         if action_id not in self.action_widgets:
