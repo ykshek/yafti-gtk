@@ -568,6 +568,7 @@ class YaftiGTK(Gtk.Window):
 
             if self.option_is_highlighted(option, status_token):
                 option_button.add_css_class("suggested-action")
+                active_button = option_button
 
             option_button.connect("clicked", self.on_option_clicked, state, option)
             actions_box.append(option_button)
@@ -580,6 +581,8 @@ class YaftiGTK(Gtk.Window):
 
         dialog.set_child(root)
         dialog.set_visible(True)
+
+        dialog.set_focus(active_button)
 
     def option_is_highlighted(self, option, status_token):
         """Return True when the option ID matches the current status token."""
