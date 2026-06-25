@@ -596,17 +596,25 @@ class YaftiGTK(Gtk.Window):
         if not script:
             return
 
-        error_message = self.launch_terminal(script)
-        if error_message is None:
+        result = self.launch_terminal(script)
+
+        if isinstance(result, subprocess.Popen):
             if (state['action'].get('status_script') or "").strip():
                 state['dirty'] = True
+
+                # Create a thread to wait for the terminal to close, then update UI
+                def wait_and_refresh():
+                    result.wait()
+                    GLib.idle_add(self.refresh_action_dialog, state, True)
+
+                threading.Thread(target=wait_and_refresh, daemon=True).start()
             return
 
         show_error_dialog(
             state['dialog'],
             "No terminal available",
             "Could not open a terminal automatically.\n\n"
-            + error_message
+            + result
             + "\n\nYou can also run the following command manually:\n\n"
             + script
         )
@@ -614,8 +622,8 @@ class YaftiGTK(Gtk.Window):
     def launch_terminal(self, script):
         """Attempt to run a command in a terminal. Returns None on success."""
         try:
-            subprocess.Popen(build_terminal_command(script))
-            return None
+            process = subprocess.Popen(build_terminal_command(script))
+            return process
         except FileNotFoundError:
             return "The default terminal launcher (xdg-terminal-exec) was not found."
         except Exception as e:
