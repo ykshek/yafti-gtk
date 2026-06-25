@@ -63,6 +63,8 @@ def initialize_gtk():
     current_desktop = os.environ.get("XDG_CURRENT_DESKTOP","").upper()
     if "KDE" not in current_desktop:
         from gi.repository import Adw
+        if Gtk.Settings.get_default().get_property('gtk-application-prefer-dark-theme'):
+            Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', False)
         Adw.init()
     try:
         Gtk.Window.set_default_icon_name(APP_ID)
