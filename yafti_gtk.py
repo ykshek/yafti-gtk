@@ -45,15 +45,14 @@ def clear_container(container):
 
 def show_error_dialog(parent, title, message):
     """Display an error dialog with the given title and message."""
-    dialog = Gtk.MessageDialog(
-        transient_for=parent,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=title
+    dialog = Gtk.AlertDialog(
+        message=title,
+        detail=message,
+        buttons=["OK"]
     )
-    dialog.format_secondary_text(message)
-    dialog.run()
-    dialog.destroy()
+    def _on_dialog_dismissed(dialog, result):
+        dialog.choose_finish(result)
+    dialog.choose(parent, None, _on_dialog_dismissed)
 
 
 def initialize_gtk():
@@ -379,10 +378,7 @@ class YaftiGTK(Gtk.Window):
             show_error_dialog(
                 self,
                 "No terminal available",
-                "Could not open a terminal automatically.\n\n"
-                + error_message
-                + "\n\nYou can also run the following command manually:\n\n"
-                + script
+                f"{error_message}\n\nCould not open a terminal automatically.\nYou can also run the following command manually:\n\n{script}"
             )
             return
 
@@ -654,12 +650,9 @@ class YaftiGTK(Gtk.Window):
             return
 
         show_error_dialog(
-            state['dialog'],
+            self,
             "No terminal available",
-            "Could not open a terminal automatically.\n\n"
-            + result
-            + "\n\nYou can also run the following command manually:\n\n"
-            + script
+            f"{result}\n\nCould not open a terminal automatically.\nYou can also run the following command manually:\n\n{script}"
         )
 
     def launch_terminal(self, script):
