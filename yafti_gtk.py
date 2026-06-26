@@ -368,7 +368,7 @@ class YaftiGTK(Gtk.Window):
                 return
 
             error_message = self.launch_terminal(script)
-            if error_message is None:
+            if isinstance(error_message, subprocess.Popen):
                 return
 
             show_error_dialog(
