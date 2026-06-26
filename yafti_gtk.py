@@ -22,6 +22,7 @@ DEFAULT_WINDOW_WIDTH = 800
 DEFAULT_WINDOW_HEIGHT = 600
 STATUS_TIMEOUT_SECONDS = 3
 ACTION_DIALOG_WIDTH = 420
+DEFAULT_ACCENT = "#a47bea"
 
 
 def set_widget_margins(widget, top=10, bottom=10, start=10, end=10):
@@ -174,7 +175,7 @@ class YaftiGTK(Gtk.Window):
         vbox.append(self.content_stack)
 
         # Load CSS for highlighting
-        self._load_css()
+        GLib.idle_add(self._load_css)
 
         self.connect("notify::is-active", self.on_window_active_changed)
         focus_controller = Gtk.EventControllerFocus.new()
@@ -183,11 +184,9 @@ class YaftiGTK(Gtk.Window):
 
     def _load_css(self):
         """Loads CSS to highlight the selected action."""
-
         def _get_system_accent_color():
             """Fetches the system accent color via XDG Portal."""
             import re
-            default_color = "deep-purple"
             try:
                 out = subprocess.check_output([
                     "gdbus", "call", "-e",
@@ -200,7 +199,7 @@ class YaftiGTK(Gtk.Window):
                 r, g, b = map(float, re.findall(r"\d+\.\d+", out)[:3])
                 return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
             except Exception:
-                return "#a47bea"
+                return DEFAULT_ACCENT
 
         accent = _get_system_accent_color()
         css = f"""
@@ -264,8 +263,7 @@ class YaftiGTK(Gtk.Window):
         set_widget_margins(page_box, 10, 10, 10, 10)
 
         for action in screen.get('actions', []):
-            action_box = self.create_action_item(action)
-            page_box.append(action_box)
+            page_box.append(self.create_action_item(action))
 
         scrolled.set_child(page_box)
         return scrolled
@@ -313,7 +311,7 @@ class YaftiGTK(Gtk.Window):
         index = []
         for screen in self.screens or []:
             for action in screen.get('actions', []):
-                index.append({'action': action})
+                index.append(action)
         return index
 
     def get_action_options(self, action):
@@ -321,7 +319,6 @@ class YaftiGTK(Gtk.Window):
         options = action.get('options')
         if isinstance(options, list) and options:
             return options
-
         return []
 
     def action_uses_modal(self, action):
@@ -339,8 +336,7 @@ class YaftiGTK(Gtk.Window):
 
         lowered = query.lower()
         matches = []
-        for item in self.actions_index:
-            action = item['action']
+        for action in self.actions_index:
             title = action.get('title', '')
             desc = action.get('description', '')
             if lowered in title.lower() or lowered in desc.lower():
@@ -354,7 +350,7 @@ class YaftiGTK(Gtk.Window):
         self.search_results_box.append(header)
 
         if matches:
-            for item in matches:
+            for action in matches:
                 self.search_results_box.append(self.create_action_item(item['action']))
         else:
             empty = Gtk.Label(label="No matches found")
@@ -677,18 +673,14 @@ class YaftiGTK(Gtk.Window):
             current = parent
         return None
 
-    def _finish_highlight(self, button):
-        """Does the scroll."""
+    def _apply_highlight(self, button):
+        """Scroll and applies highlight"""
         scrolled = button.get_ancestor(Gtk.ScrolledWindow)
         if scrolled:
             try:
                 scrolled.scroll_to_child(button, None)
             except AttributeError:
                 pass
-        self._apply_highlight(button)
-
-    def _apply_highlight(self, button):
-        """Applies the highlight."""
         button.add_css_class("highlighted-action")
         if button.get_mapped():
             self.set_focus(button)
@@ -701,12 +693,7 @@ class YaftiGTK(Gtk.Window):
         page_name = self._get_page_for_widget(button)
         self.content_stack.set_visible_child_name("tabs")
         self.screen_stack.set_visible_child_name(page_name)
-
-        def _delayed_scroll():
-            """ Delay to make sure scrolling animation is played."""
-            self._finish_highlight(button)
-            return False
-        GLib.timeout_add(250, _delayed_scroll)
+        GLib.timeout_add(250, lambda: [self._apply_highlight(button), False][1])
 
 def main():
     # Parse command line arguments
