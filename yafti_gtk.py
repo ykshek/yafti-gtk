@@ -7,6 +7,7 @@ import subprocess
 import sys, os
 import threading
 import argparse
+import concurrent.futures
 
 import gi
 import yaml
@@ -22,6 +23,7 @@ DEFAULT_WINDOW_WIDTH = 800
 DEFAULT_WINDOW_HEIGHT = 600
 STATUS_TIMEOUT_SECONDS = 3
 ACTION_DIALOG_WIDTH = 420
+DEFAULT_ACCENT = "#a47bea"
 
 
 def set_widget_margins(widget, top=10, bottom=10, start=10, end=10):
@@ -108,6 +110,7 @@ class YaftiGTK(Gtk.Window):
         self.set_default_size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self.active_dialog_state = None
         self.action_widgets = {}  # action_id -> (button)
+        self.action_status_widgets = {}
 
         # Load YAML configuration
         self.config = self.load_config(config_file)
@@ -174,20 +177,20 @@ class YaftiGTK(Gtk.Window):
         vbox.append(self.content_stack)
 
         # Load CSS for highlighting
-        self._load_css()
+        GLib.idle_add(self._load_css)
 
         self.connect("notify::is-active", self.on_window_active_changed)
         focus_controller = Gtk.EventControllerFocus.new()
         focus_controller.connect("enter", self.on_window_focus_in)
         self.add_controller(focus_controller)
+        GLib.idle_add(self.refresh_all_action_states)
+        self.connect("destroy", self.on_destroy)
 
     def _load_css(self):
         """Loads CSS to highlight the selected action."""
-
         def _get_system_accent_color():
             """Fetches the system accent color via XDG Portal."""
             import re
-            default_color = "deep-purple"
             try:
                 out = subprocess.check_output([
                     "gdbus", "call", "-e",
@@ -200,7 +203,7 @@ class YaftiGTK(Gtk.Window):
                 r, g, b = map(float, re.findall(r"\d+\.\d+", out)[:3])
                 return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
             except Exception:
-                return "#a47bea"
+                return DEFAULT_ACCENT
 
         accent = _get_system_accent_color()
         css = f"""
@@ -264,8 +267,7 @@ class YaftiGTK(Gtk.Window):
         set_widget_margins(page_box, 10, 10, 10, 10)
 
         for action in screen.get('actions', []):
-            action_box = self.create_action_item(action)
-            page_box.append(action_box)
+            page_box.append(self.create_action_item(action))
 
         scrolled.set_child(page_box)
         return scrolled
@@ -273,13 +275,12 @@ class YaftiGTK(Gtk.Window):
     def create_action_item(self, action):
         """Create a clickable action item."""
         button = Gtk.Button()
-        button.set_hexpand(True)
-        button.set_halign(Gtk.Align.FILL)
 
         button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         set_widget_margins(button_box, 8, 8, 8, 8)
 
         text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box.set_hexpand(True)
 
         title_label = Gtk.Label()
         title_label.set_markup(f"<b>{escape_markup(action.get('title', 'Action'))}</b>")
@@ -295,16 +296,33 @@ class YaftiGTK(Gtk.Window):
             text_box.append(desc_label)
 
         button_box.append(text_box)
+
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        status_box.set_valign(Gtk.Align.CENTER)
+        status_box.set_size_request(80, -1)
+
+        # Start with a default "loading" or "pending" emoji
+        status_label = Gtk.Label(label="⏳ Checking...")
+        status_label.add_css_class('dim-label')
+        status_label.set_xalign(0)
+
+        status_box.append(status_label)
+        button_box.append(status_box)
+
         button.set_child(button_box)
         button.connect("clicked", self.on_action_clicked, action)
 
         frame = Gtk.Frame()
         frame.set_child(button)
 
-        # Store button for lookup
+        # Store references
         action_id = action.get('id')
         if action_id:
             self.action_widgets[action_id] = button
+            if action.get('status_script'):
+                self.action_status_widgets[action_id] = status_label
+            else:
+                status_box.set_visible(False)
 
         return frame
 
@@ -313,7 +331,7 @@ class YaftiGTK(Gtk.Window):
         index = []
         for screen in self.screens or []:
             for action in screen.get('actions', []):
-                index.append({'action': action})
+                index.append(action)
         return index
 
     def get_action_options(self, action):
@@ -321,7 +339,6 @@ class YaftiGTK(Gtk.Window):
         options = action.get('options')
         if isinstance(options, list) and options:
             return options
-
         return []
 
     def action_uses_modal(self, action):
@@ -339,8 +356,7 @@ class YaftiGTK(Gtk.Window):
 
         lowered = query.lower()
         matches = []
-        for item in self.actions_index:
-            action = item['action']
+        for action in self.actions_index:
             title = action.get('title', '')
             desc = action.get('description', '')
             if lowered in title.lower() or lowered in desc.lower():
@@ -354,7 +370,7 @@ class YaftiGTK(Gtk.Window):
         self.search_results_box.append(header)
 
         if matches:
-            for item in matches:
+            for action in matches:
                 self.search_results_box.append(self.create_action_item(item['action']))
         else:
             empty = Gtk.Label(label="No matches found")
@@ -645,6 +661,7 @@ class YaftiGTK(Gtk.Window):
                 def wait_and_refresh():
                     result.wait()
                     GLib.idle_add(self.refresh_action_dialog, state, True)
+                    GLib.idle_add(self.fetch_and_update_single_status, state['action'].get('id'), state['action'].get('status_script'))
 
                 threading.Thread(target=wait_and_refresh, daemon=True).start()
             return
@@ -665,6 +682,79 @@ class YaftiGTK(Gtk.Window):
         except Exception as e:
             return f"Terminal launch failed: {e}"
 
+    def refresh_all_action_states(self):
+        """Run status checks for all actions in a background thread pool."""
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        for action in self.actions_index:
+            action_id = action.get('id')
+            status_script = action.get('status_script')
+            if status_script:
+                self.executor.submit(self.fetch_and_update_single_status, action_id, status_script)
+
+    def on_destroy(self, widget):
+        """Let executor threads finish naturally"""
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
+
+    def fetch_and_update_single_status(self, action_id, status_script):
+        """Executes a single script and schedules a UI update."""
+        status_token = "unknown"
+        try:
+            result = subprocess.run(
+                build_headless_command(status_script),
+                capture_output=True,
+                text=True,
+                timeout=STATUS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    token = line.strip()
+                    if token:
+                        status_token = token
+                        break
+        except Exception:
+            pass
+
+        # Safely update the GTK UI from the background thread
+        GLib.idle_add(self._update_status_ui, action_id, status_token)
+
+    def _update_status_ui(self, action_id, status_token):
+        """Updates the icon and label on the main GTK thread."""
+        widgets = self.action_status_widgets.get(action_id)
+        if not widgets:
+            return False
+
+        token_lower = status_token.lower()
+        if token_lower in ["install", "active", "enable", "add"]:
+            emoji = "🟢"
+        elif token_lower in ["uninstall", "inactive", "disable", "disabled", "remove", "unset"]:
+            emoji = "🟠"
+        elif token_lower == "unknown":
+            emoji = "⚪"
+        else:
+            emoji = "🔵"
+
+        # Map token to human-readable text
+        if status_token == "unknown":
+            display_text = "Unknown"
+        elif token_lower in ["install"]:
+            display_text = "Installed"
+        elif token_lower in ["enable"]:
+            display_text = "Enabled"
+        elif token_lower in ["uninstall"]:
+            display_text = "Not installed"
+        elif token_lower in ["disable"]:
+            display_text = "Disabled"
+        elif token_lower in ["remove"]:
+            display_text = "Removed"
+        else:
+            display_text = status_token.capitalize()
+
+        # Update the single label with both the emoji and text
+        widgets.set_text(f"{emoji} {display_text}")
+        return False
+
     def _get_page_for_widget(self, widget):
         """Gets the page number of the widget to switch to. Returns None on fail."""
         current = widget
@@ -677,18 +767,14 @@ class YaftiGTK(Gtk.Window):
             current = parent
         return None
 
-    def _finish_highlight(self, button):
-        """Does the scroll."""
+    def _apply_highlight(self, button):
+        """Scroll and applies highlight"""
         scrolled = button.get_ancestor(Gtk.ScrolledWindow)
         if scrolled:
             try:
                 scrolled.scroll_to_child(button, None)
             except AttributeError:
                 pass
-        self._apply_highlight(button)
-
-    def _apply_highlight(self, button):
-        """Applies the highlight."""
         button.add_css_class("highlighted-action")
         if button.get_mapped():
             self.set_focus(button)
@@ -701,12 +787,7 @@ class YaftiGTK(Gtk.Window):
         page_name = self._get_page_for_widget(button)
         self.content_stack.set_visible_child_name("tabs")
         self.screen_stack.set_visible_child_name(page_name)
-
-        def _delayed_scroll():
-            """ Delay to make sure scrolling animation is played."""
-            self._finish_highlight(button)
-            return False
-        GLib.timeout_add(250, _delayed_scroll)
+        GLib.timeout_add(250, lambda: [self._apply_highlight(button), False][1])
 
 def main():
     # Parse command line arguments
